@@ -1,0 +1,343 @@
+---
+title: "NFL Scrape Test Icing Kickers"
+author: "Sam Silva"
+date: "11/20/2016"
+output:
+  html_document: default
+  word_document: default
+---
+
+```{r, echo = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>",
+  fig.path = "README-",
+  cache = TRUE,
+  tidy = TRUE
+)
+require(pacman)
+```
+
+```{r loadpacs, echo=TRUE}
+# Must install the devtools package using the below commented out code
+# install.packages("devtools")
+  p_load(devtools)
+  #devtools::install_github(repo = "maksimhorowitz/nflscrapR")
+# Load the package
+  p_load(nflscrapR)
+```
+
+
+Get the game information for all NFL games from 2009 to 2015.  NFL.com doesn't want to serve 2007 and 2008.
+
+Change the `` to ``` at the beginning and end of the chunk to make it executable.  The chunk can be made non-executable once the dataframe has been created and saved for reloading.
+
+```{r grabgames, echo=TRUE}
+  # NFL.COM seems not to want to serve years 2007 and 2008
+  years <- c(2009:2015)
+  for (i in 1:length(years)){
+    print(years[i])
+    assign(paste0("gameids", years[i]), extracting_gameids(years[i], playoffs = FALSE))
+  }
+```
+
+Now grab all the play information for all of the games that were found above.
+
+Change the `` to ``` at the beginning and end of the chunk to make it executable. The chunk can be made non-executable once the dataframe has been created and saved for reloading. 
+
+```{r, getplays, echo=TRUE}
+  years <- c(2009:2015)
+  rm(plays)
+  print(years[1])
+  gameids <- eval(as.symbol(paste0("gameids", years[1])))
+  plays <- game_play_by_play(gameids[1])
+  for(i in 2:length(gameids)){
+    tempplays <- game_play_by_play(gameids[i])
+    plays <- rbind(plays, tempplays)
+    rm(tempplays)
+    print(c(years[1], paste(i/length(gameids)*100,"%")))
+  }
+  for(j in 2:length(years)){
+    print(years[j])
+    gameids <- eval(as.symbol(paste0("gameids", years[j])))  
+    for(i in 1:length(gameids)){
+      tempplays <- game_play_by_play(gameids[i])
+      plays <- rbind(plays, tempplays)
+      rm(tempplays)
+      print(c(years[j], paste(i/length(gameids)*100,"%")))
+    }
+  }
+  dim(plays)
+  head(plays)
+  write.csv(plays,"plays.csv")
+```
+
+We can create a new dataframe that contains "Timeout" and "Field Goal" events.
+
+Change the `` to ``` at the beginning and end of the chunk to make it executable.  The chunk can be made non-executable once the dataframe has been created and saved for reloading.
+
+```{r subsetFGandTO, echo=TRUE}
+  table(plays$PlayType)
+  FGsTOs <- subset(plays, PlayType %in% c("Timeout", "Field Goal"))
+  # FGsTOs <- plays[plays$PlayType %in% c("Timeout", "Field Goal"),]
+  table(FGsTOs$PlayType) 
+  write.csv(FGsTOs,"FGsTOs.csv")
+```
+
+Determine if the kicker was iced and subset the data to get only field goals (FGs).
+
+```{r subsetFG, echo=TRUE}
+  p_load(dplyr)
+  p_load(stringr)
+
+  ### Comment out the next line if you are building the plays above
+  ### Change the file location to reflect where it is stored
+  #load("D:/Fall16/FYS/NFLScrape/PlayByPlay/FYSNFLproject20161120.RData")
+  #load("/Users/samuelsilva/Desktop/FYSNFLproject20161120.Rdata")
+  
+  ### Using plays
+  temp = plays
+  temp$desc1 = toupper(lag(temp$desc,1))
+  temp$desc2 = toupper(lag(temp$desc,2))
+  temp$time1 = lag(temp$time,1)
+  temp$time2 = lag(temp$time,2)
+  temp$PlayType1 = lag(temp$PlayType,1)
+  temp$PlayType2 = lag(temp$PlayType,2)
+  temp$DefensiveTeam = toupper(temp$DefensiveTeam)
+  temp$Iced1 = rep(NA,nrow(temp))
+  temp$Iced1 = (temp$PlayType1=="Timeout" & temp$PlayType=="Field Goal") & (temp$time1==temp$time) & !is.na(str_locate(temp$desc1,temp$DefensiveTeam)[,1])
+  table(temp$Iced1)
+   temp$Iced2 = (temp$PlayType2=="Timeout" & temp$PlayType=="Field Goal") & (temp$time2==temp$time) & !is.na(str_locate(temp$desc2,temp$DefensiveTeam)[,2])
+   temp$Iced = temp$Iced1 | temp$Iced2
+  xtabs(~Iced2, data=temp)
+  xtabs(~Iced1+Iced2, data=temp)
+  xtabs(~FieldGoalResult+(Iced1 | Iced2), data=temp)
+  temp$obsNo = 1:nrow(temp)
+  
+  FGs = subset(temp, temp$PlayType=="Field Goal")
+  FGs$FieldGoalDistance = as.numeric(FGs$FieldGoalDistance)
+  FGs$FieldGoalGood = factor(FGs$FieldGoalResult=="Good")
+  FGs$Iced = factor(FGs$Iced)
+  FGs$Iced1 = factor(FGs$Iced1)
+  FGs$Iced2 = factor(FGs$Iced2)
+  xtabs(~FieldGoalGood+Iced, data=FGs)
+ 
+  # Recode TRUE/FALSE as No/Yes
+  FGs$Iced=factor(FGs$Iced, levels = c(FALSE,TRUE), labels = c("No","Yes"))
+  FGs$FieldGoalGood=factor(FGs$FieldGoalGood, levels = c(FALSE,TRUE), labels = c("No","Yes"))
+  
+  #write.csv(FGs,"d:/fall16/fys/nflscrape/playbyplay/FGs.csv")
+ 
+  # Remove temp since it is a bigger version of plays with subseting variables
+  rm(temp)
+  save.image("FYSNFLproject20161216.RData")
+```
+
+Add kicker
+
+```{r addkicker, echo=TRUE}
+ p_load(stringr)
+ #tmpx = FGs[c(1,7,15),"desc"]
+ getkicker <- function(x=tmpx){
+    n <- length(x)
+    kicker <- rep(NA,n)
+    #print(paste("kicker=",kicker))
+    for (i in 1:n){
+      #print(paste("i=",i," of ",n))
+      tmp <- strsplit(x[i], split="formation) ")
+      tmpn <- length(tmp[[1]])
+      #print(paste("tmp=", tmp))
+      #print(paste("tmpn=",tmpn))
+      if (tmpn==1){
+        tmpk <- strsplit(tmp[[1]][1], split=") ")
+        #print(paste("tmpk1=",tmpk))
+        tmpk <- strsplit(tmpk[[1]][2],split=" ")
+        #print(paste("tmpk2=",tmpk))
+        kicker[i] <- tmpk[[1]][1]
+        #print(paste("kicker=",kicker))
+      }else{
+        tmp <- strsplit(tmp[[1]][2], split=" ")
+        #print(paste("tmp=",tmp))
+        kicker[i] <- tmp[[1]][1]
+        #print(paste("kicker=",kicker))
+      } # else
+    } # for
+    return(str_trim(chartr(",.","  ",kicker),"both"))
+ } #getkicker
+ #getkicker(tmpx)
+ FGs$kicker = getkicker(FGs$desc)
+ FGs$A.Vinatieri = factor(FGs$kicker=="A Vinatieri",levels = c(FALSE,TRUE),labels = c("No","Yes"))
+  FGs$D.Bailey = factor(FGs$kicker=="D Bailey",levels = c(FALSE,TRUE),labels = c("No","Yes"))
+  FGs$M.Crosby = factor(FGs$kicker=="M Crosby",levels = c(FALSE,TRUE),labels = c("No","Yes"))
+  xtabs(~kicker+M.Crosby, data=FGs)
+```
+
+Load packages needed to fit the logist regression models (lrm) and to generate predicted probability plots and nomograms.
+
+```{r loadpacks, echo=TRUE}
+  # Load a few packages
+  p_load(Hmisc)
+  p_load(xtable)
+  p_load(lattice)
+  p_load(rms)  ### Modern R replacement for the Design package
+```
+
+## Fitting Logistic Models
+
+### Distance
+
+The method of fitting models by finding the observed log-odds that is demonstrated above is tedious.  A model to test for the difference in odds of **FieldGoalGood** = "Y" as determined by **FieldGoalDistance** may be fitted using the **lrm** function.
+
+```{r lrmdistance, echo=TRUE}
+  # Define the data.frame removing variables that won't be used.
+  FG = FGs[,c(1:19, 49:50, 62:65, 67:ncol(FGs))]
+  dd = datadist(FG)
+  options(datadist="dd")
+  if ("FG" %in% search()) detach(FG)
+  attach(FG)
+  # Fit a logistic model of Hit as a function of Distance
+  FG.lrm.dist=lrm(FieldGoalGood~FieldGoalDistance, x=TRUE, y=TRUE)
+  FG.lrm.dist
+  # Get a little information about the quality of the model
+  anova(FG.lrm.dist)
+```
+
+Since the coefficient of **FieldGoalDistance** is negative, we see that the (log) odds of making a shot (**FieldGoalGood** = "Y") decreases as **FieldGoalDistance** increases.  This can most easily be seen using the odds ratios.  Comparisons against the minimum distance show the effect of moving farther back.  E.g. a FG from 60 yards is about 0.015 (0.010, 0.020) as likely to be made as one taken from 18 yrds.
+
+```{r oddsdist, echo=TRUE}
+  summary(FG.lrm.dist)
+  summary(FieldGoalDistance, na.rm=TRUE)
+  min(FieldGoalDistance, na.rm=TRUE)
+  summary(FG.lrm.dist, FieldGoalDistance=c(min(FieldGoalDistance, na.rm=TRUE),30))
+  summary(FG.lrm.dist, FieldGoalDistance=c(min(FieldGoalDistance, na.rm=TRUE),40))
+  summary(FG.lrm.dist, FieldGoalDistance=c(min(FieldGoalDistance, na.rm=TRUE),50))
+  summary(FG.lrm.dist, FieldGoalDistance=c(min(FieldGoalDistance, na.rm=TRUE),60))
+
+```
+
+The probability of making the FG at different distances may be plotted.
+
+```{r plotdist, echo=TRUE}
+  print(plot(Predict(FG.lrm.dist, fun=plogis), ylab="Probability of Making a Kick", xlab="Yards"))
+```
+
+We see that as the kick is taken from farther back, the probability of their making the FG decreases.  A nomogram may be helpful in estimating these probabilities.
+
+```{r nomogramdist, echo=TRUE}
+  nom = nomogram(FG.lrm.dist, fun=plogis)
+  print(plot(nom))
+```
+
+### Icing
+
+A model to test for the difference in odds of **FieldGoalGood** = "Y" as determined by **Iced** may be fitted using the **lrm** function.
+
+```{r lrmhand, echo=TRUE}
+  xtabs(~Iced, data=FGs)
+  FG = FGs[,c(1:19, 49:50, 62:65, 67:ncol(FGs))]
+  dd = datadist(FG)
+  options(datadist="dd")
+  if ("FG" %in% search()) detach(FG)
+  attach(FG)
+  FG.lrm.Iced=lrm(FieldGoalGood~Iced, x=TRUE, y=TRUE)
+  FG.lrm.Iced
+  anova(FG.lrm.Iced)
+  summary(FG.lrm.Iced, Iced=c("No"))
+  summary(FG.lrm.Iced, Iced=c("Yes"))
+  plot(Predict(FG.lrm.Iced, fun=plogis), ylab="Probability of Making a Kick")
+  nom = nomogram(FG.lrm.Iced, fun=plogis)
+  plot(nom)
+```
+
+### Kicker
+
+```{r lrmkicker, echo=TRUE}
+
+ ### Code to the next comment subsets the data for kickers with ge 20 attempts
+ ### who were iced more than 4 times
+ kickertable = table(FGs$kicker)
+ kickertable
+ FGs$kickerge20 = FGs$kicker %in% names(kickertable[kickertable >= 20])
+ kickericedtable = table(FGs$kicker, FGs$Iced)
+ kickericedtable
+ FGs$kickericed = FGs$kicker %in% dimnames(kickericedtable[kickericedtable[,2] > 4,])[[1]]
+ xtabs(~kickericed+Iced, data=FGs)
+ FG = subset(FGs, FGs$kickericed)
+ xtabs(~kicker+Iced, data=FG)
+ ### End of subsetting
+ 
+ # Refit distance to see if things changed
+  # Define the data.frame using subsetted data.frame removing variables that     
+  # won't be used.
+  FG = FG[,c(1:19, 49:50, 62:65, 67:ncol(FG))]
+  dd = datadist(FG)
+  options(datadist="dd")
+  while("FG" %in% search()) { detach(FG) }
+  attach(FG)
+  
+  # Fit a logistic model of Hit as a function of Distance
+  FG.lrm.dist=lrm(FieldGoalGood~FieldGoalDistance, x=TRUE, y=TRUE)
+  FG.lrm.dist
+  # Get a little information about the quality of the model
+  anova(FG.lrm.dist)
+  # Odds ratios
+  summary(FG.lrm.dist)
+  summary(FieldGoalDistance, na.rm=TRUE)
+  min(FieldGoalDistance, na.rm=TRUE)
+  summary(FG.lrm.dist, FieldGoalDistance=c(min(FieldGoalDistance, na.rm=TRUE),30))
+  summary(FG.lrm.dist, FieldGoalDistance=c(min(FieldGoalDistance, na.rm=TRUE),40))
+  summary(FG.lrm.dist, FieldGoalDistance=c(min(FieldGoalDistance, na.rm=TRUE),50))
+  summary(FG.lrm.dist, FieldGoalDistance=c(min(FieldGoalDistance, na.rm=TRUE),60))
+    print(plot(Predict(FG.lrm.dist, fun=plogis), ylab="Probability of Making a Kick", xlab="Yards"))
+  # Nomogram
+  nom = nomogram(FG.lrm.dist, fun=plogis)
+  print(plot(nom))
+  
+  # Refit Iced model
+  FG.lrm.Iced=lrm(FieldGoalGood~Iced, x=TRUE, y=TRUE)
+  FG.lrm.Iced
+  anova(FG.lrm.Iced)
+  summary(FG.lrm.Iced, Iced=c("No"))
+  summary(FG.lrm.Iced, Iced=c("Yes"))
+  plot(Predict(FG.lrm.Iced, fun=plogis), ylab="Probability of Making a Kick")
+  nom = nomogram(FG.lrm.Iced, fun=plogis)
+  plot(nom)
+  
+  # Fit kicker model
+  FG.lrm.kicker=lrm(FieldGoalGood~kicker, x=TRUE, y=TRUE)
+  FG.lrm.kicker
+  anova(FG.lrm.kicker)
+  summary(FG.lrm.kicker, kicker=c("A Vinatieri"))
+  summary(FG.lrm.kicker, kicker=c("M Crosby"))
+  plot(Predict(FG.lrm.kicker, fun=plogis), ylab="Probability of Making a Kick")
+  nom = nomogram(FG.lrm.kicker, fun=plogis)
+  plot(nom)
+  
+  # Fit kicker*Iced model
+  FG.lrm.kickerIced=lrm(FieldGoalGood~kicker*Iced, x=TRUE, y=TRUE)
+  FG.lrm.kickerIced
+  anova(FG.lrm.kickerIced)
+  summary(FG.lrm.kickerIced, kicker=c("A Vinatieri"), Iced=c("No"))
+  plot(Predict(FG.lrm.kickerIced, fun=plogis, kicker=c("A Vinatieri","M Crosby"), Iced=c("No","Yes")), ylab="Probability of Making a Kick")
+  nom = nomogram(FG.lrm.kickerIced, fun=plogis)
+  plot(nom)
+  
+  # Fit kicker*FieldGoalDistance model
+  FG.lrm.kickerDist=lrm(FieldGoalGood~kicker*FieldGoalDistance, x=TRUE, y=TRUE)
+  FG.lrm.kickerDist
+  anova(FG.lrm.kickerDist)
+  summary(FG.lrm.kickerDist, kicker=c("A Vinatieri"))
+  plot(Predict(FG.lrm.kickerDist, fun=plogis, kicker=c("A Vinatieri","M Crosby")), ylab="Probability of Making a Kick")
+  nom = nomogram(FG.lrm.kickerDist, fun=plogis)
+  plot(nom)
+  
+  # Fit Iced*FieldGoalDistance model
+  FG.lrm.IcedDist=lrm(FieldGoalGood~Iced*FieldGoalDistance, x=TRUE, y=TRUE)
+  FG.lrm.IcedDist
+  anova(FG.lrm.IcedDist)
+  summary(FG.lrm.IcedDist, Iced=c("No"))
+  plot(Predict(FG.lrm.IcedDist, fun=plogis), ylab="Probability of Making a Kick")
+  nom = nomogram(FG.lrm.IcedDist, fun=plogis)
+  plot(nom)
+```
+
